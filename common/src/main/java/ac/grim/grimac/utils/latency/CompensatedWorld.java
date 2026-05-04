@@ -62,6 +62,7 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.logging.Logger;
 
 // Inspired by https://github.com/GeyserMC/Geyser/blob/master/connector/src/main/java/org/geysermc/connector/network/session/cache/ChunkCache.java
 public class CompensatedWorld implements PacketWorld {
@@ -91,6 +92,8 @@ public class CompensatedWorld implements PacketWorld {
     public boolean isRaining = false;
 
     private final boolean noNegativeBlocks;
+
+    private static final Logger PISTON_LOGGER = Logger.getLogger("GrimPiston");
 
     public CompensatedWorld(GrimPlayer player) {
         this.player = player;
@@ -359,9 +362,22 @@ public class CompensatedWorld implements PacketWorld {
         double modY = 0;
         double modZ = 0;
 
+        // Log overall active piston count once per tick if any are active
+        if (!activePistons.isEmpty()) {
+            PISTON_LOGGER.info("[PISTON TICK] player=" + player.user.getName()
+                    + " activePistons=" + activePistons.size()
+                    + " playerPos=(" + String.format("%.3f", player.x) + ","
+                    + String.format("%.3f", player.y) + ","
+                    + String.format("%.3f", player.z) + ")");
+        }
+
         for (PistonData data : activePistons) {
+            boolean playerIsNearThisPiston = false;
+
             for (SimpleCollisionBox box : data.boxes) {
                 if (playerBox.isCollided(box)) {
+                    playerIsNearThisPiston = true;
+
                     modX = Math.max(modX, Math.abs(data.direction.getModX() * 0.51D));
                     modY = Math.max(modY, Math.abs(data.direction.getModY() * 0.51D));
                     modZ = Math.max(modZ, Math.abs(data.direction.getModZ() * 0.51D));
@@ -376,7 +392,41 @@ public class CompensatedWorld implements PacketWorld {
                     break;
                 }
             }
+
+
+            // Log per-piston state every tick while active
+        PISTON_LOGGER.info("[PISTON STATE] player=" + player.user.getName()
+                + " type=" + (data.isPush ? "PUSH" : "RETRACT")
+                + " dir=" + data.direction
+                + " tick=" + data.ticksOfPistonBeingAlive + "/10"
+                + " boxes=" + data.boxes.size()
+                + " slime=" + data.hasSlimeBlock
+                + " honey=" + data.hasHoneyBlock
+                + " transaction=" + data.lastTransactionSent
+                + " playerNearby=" + playerIsNearThisPiston);
+
+        // Log each box's position for full spatial picture
+        for (int i = 0; i < data.boxes.size(); i++) {
+            SimpleCollisionBox box = data.boxes.get(i);
+            boolean intersectsPlayer = playerBox.isCollided(box);
+            PISTON_LOGGER.info("[PISTON BOX " + i + "] "
+                    + "min=(" + String.format("%.2f", box.minX) + ","
+                    + String.format("%.2f", box.minY) + ","
+                    + String.format("%.2f", box.minZ) + ")"
+                    + " max=(" + String.format("%.2f", box.maxX) + ","
+                    + String.format("%.2f", box.maxY) + ","
+                    + String.format("%.2f", box.maxZ) + ")"
+                    + " hitsPlayer=" + intersectsPlayer);
         }
+
+        if (playerIsNearThisPiston) {
+            PISTON_LOGGER.info("[PISTON INFLUENCE] player=" + player.user.getName()
+                    + " appliedUncertainty modX=" + String.format("%.4f", modX)
+                    + " modY=" + String.format("%.4f", modY)
+                    + " modZ=" + String.format("%.4f", modZ));
+        }
+    }
+
 
         for (ShulkerData data : openShulkerBoxes) {
             SimpleCollisionBox shulkerCollision = data.getCollision();
@@ -422,11 +472,33 @@ public class CompensatedWorld implements PacketWorld {
     public void removeInvalidPistonLikeStuff(int transactionId) {
         // Tick the pistons and remove them if they can no longer exist
         if (transactionId != 0) {
+            // Log before transaction-based removal
+            activePistons.stream()
+                    .filter(data -> data.lastTransactionSent < transactionId)
+                    .forEach(data -> PISTON_LOGGER.info("[PISTON REMOVED/TRANSACTION] player=" + player.user.getName()
+                            + " type=" + (data.isPush ? "PUSH" : "RETRACT")
+                            + " dir=" + data.direction
+                            + " survivedTicks=" + data.ticksOfPistonBeingAlive
+                            + " removedByTransaction=" + transactionId
+                            + " pistonTransaction=" + data.lastTransactionSent));
+
             activePistons.removeIf(data -> data.lastTransactionSent < transactionId);
             openShulkerBoxes.removeIf(data -> data.isClosing && data.lastTransactionSent < transactionId);
+
         } else {
+            // Log before tick-expiry removal
+            activePistons.stream()
+                    .filter(data -> data.ticksOfPistonBeingAlive >= 9) // about to expire
+                    .forEach(data -> PISTON_LOGGER.info("[PISTON EXPIRING] player=" + player.user.getName()
+                            + " type=" + (data.isPush ? "PUSH" : "RETRACT")
+                            + " dir=" + data.direction
+                            + " tick=" + data.ticksOfPistonBeingAlive + "/10"
+                            + " slime=" + data.hasSlimeBlock
+                            + " honey=" + data.hasHoneyBlock));
+
             activePistons.removeIf(PistonData::tickIfGuaranteedFinished);
             openShulkerBoxes.removeIf(ShulkerData::tickIfGuaranteedFinished);
+
         }
         // Remove if a shulker is not in this block position anymore
         openShulkerBoxes.removeIf(box -> {

@@ -18,6 +18,7 @@ import org.bukkit.event.block.BlockPistonRetractEvent;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.logging.Logger;
 
 public class PistonEvent implements Listener {
 
@@ -26,6 +27,8 @@ public class PistonEvent implements Listener {
 
     private static final double MAX_HORIZONTAL_DISTANCE = 24.0;
     private static final double MAX_VERTICAL_DISTANCE = 64.0;
+
+    private static final Logger LOGGER = Logger.getLogger("GrimPiston");
 
     // accuracy isn't that important, it's close enough and performant
     private static boolean isCloseEnough(Vector3i vectorA, Vector3d vectorB) {
@@ -40,7 +43,9 @@ public class PistonEvent implements Listener {
         boolean hasHoneyBlock = false;
 
         List<SimpleCollisionBox> boxes = new ArrayList<>();
-        for (Block block : event.getBlocks()) {
+        List<Block> movedBlocks = event.getBlocks();
+
+        for (Block block : movedBlocks) {
             boxes.add(new SimpleCollisionBox(0, 0, 0, 1, 1, 1, true)
                     .offset(block.getX(),
                             block.getY(),
@@ -50,19 +55,12 @@ public class PistonEvent implements Listener {
                             block.getY() + event.getDirection().getModY(),
                             block.getZ() + event.getDirection().getModZ()));
 
-            // Support honey block like this because ViaVersion replacement
-            if (block.getType() == SLIME_BLOCK) {
-                hasSlimeBlock = true;
-            }
-
-            if (block.getType() == HONEY_BLOCK) {
-                hasHoneyBlock = true;
-            }
+            if (block.getType() == SLIME_BLOCK) hasSlimeBlock = true;
+            if (block.getType() == HONEY_BLOCK) hasHoneyBlock = true;
         }
 
         Block piston = event.getBlock();
 
-        // Add bounding box of the actual piston head pushing
         boxes.add(new SimpleCollisionBox(0, 0, 0, 1, 1, 1, true)
                 .offset(piston.getX() + event.getDirection().getModX(),
                         piston.getY() + event.getDirection().getModY(),
@@ -73,14 +71,45 @@ public class PistonEvent implements Listener {
         final BlockFace blockFace = BukkitConversionUtils.fromBukkitFace(event.getDirection());
         final Vector3i sourcePos = new Vector3i(piston.getX(), piston.getY(), piston.getZ());
 
+        // Log the piston extension event
+        StringBuilder pistonLog = new StringBuilder();
+        pistonLog.append("[PISTON EXTEND] pos=(")
+                .append(piston.getX()).append(",")
+                .append(piston.getY()).append(",")
+                .append(piston.getZ()).append(")")
+                .append(" dir=").append(blockFace)
+                .append(" movedBlocks=").append(movedBlocks.size())
+                .append(" headTarget=(")
+                .append(piston.getX() + event.getDirection().getModX()).append(",")
+                .append(piston.getY() + event.getDirection().getModY()).append(",")
+                .append(piston.getZ() + event.getDirection().getModZ()).append(")")
+                .append(" slime=").append(hasSlimeBlock)
+                .append(" honey=").append(hasHoneyBlock);
+        for (int i = 0; i < movedBlocks.size(); i++) {
+            Block b = movedBlocks.get(i);
+            pistonLog.append("\n  block[").append(i).append("]: type=").append(b.getType())
+                    .append(" from=(").append(b.getX()).append(",").append(b.getY()).append(",").append(b.getZ()).append(")")
+                    .append(" to=(")
+                    .append(b.getX() + event.getDirection().getModX()).append(",")
+                    .append(b.getY() + event.getDirection().getModY()).append(",")
+                    .append(b.getZ() + event.getDirection().getModZ()).append(")");
+        }
+        LOGGER.info(pistonLog.toString());
+
         for (GrimPlayer player : GrimAPI.INSTANCE.getPlayerDataManager().getEntries()) {
             if (isCloseEnough(sourcePos, player.compensatedEntities.self.trackedServerPosition.getPos()) && player.compensatedWorld.isChunkLoaded(chunkX, chunkZ)) {
                 final int lastTrans = player.lastTransactionSent.get();
                 PistonData data = new PistonData(blockFace, boxes, lastTrans, true, hasSlimeBlock, hasHoneyBlock);
+
+                LOGGER.info("[PISTON EXTEND] Registering for player " + player.user.getName()
+                        + " transaction=" + lastTrans
+                        + " totalBoxes=" + boxes.size());
+
                 player.latencyUtils.addRealTimeTaskAsync(lastTrans, () -> player.compensatedWorld.activePistons.add(data));
             }
         }
     }
+
 
     // For some unknown reason, bukkit handles this stupidly
     // Calls the event once without blocks
@@ -99,42 +128,62 @@ public class PistonEvent implements Listener {
 
         List<SimpleCollisionBox> boxes = new ArrayList<>();
         BlockFace face = BukkitConversionUtils.fromBukkitFace(event.getDirection());
+        List<Block> movedBlocks = event.getBlocks();
 
-        // The event was called without blocks and is therefore in the right direction
-        if (event.getBlocks().isEmpty()) {
+        if (movedBlocks.isEmpty()) {
             Block piston = event.getBlock();
-
-            // Add bounding box of the actual piston head pushing
             boxes.add(new SimpleCollisionBox(0, 0, 0, 1, 1, 1, true)
                     .offset(piston.getX() + face.getModX(),
                             piston.getY() + face.getModY(),
                             piston.getZ() + face.getModZ()));
         }
 
-        for (Block block : event.getBlocks()) {
+        for (Block block : movedBlocks) {
             boxes.add(new SimpleCollisionBox(0, 0, 0, 1, 1, 1, true)
                     .offset(block.getX(), block.getY(), block.getZ()));
             boxes.add(new SimpleCollisionBox(0, 0, 0, 1, 1, 1, true)
                     .offset(block.getX() + face.getModX(), block.getY() + face.getModY(), block.getZ() + face.getModZ()));
 
-            // Support honey block like this because ViaVersion replacement
-            if (block.getType() == SLIME_BLOCK) {
-                hasSlimeBlock = true;
-            }
-
-            if (block.getType() == HONEY_BLOCK) {
-                hasHoneyBlock = true;
-            }
+            if (block.getType() == SLIME_BLOCK) hasSlimeBlock = true;
+            if (block.getType() == HONEY_BLOCK) hasHoneyBlock = true;
         }
 
-        final int chunkX = event.getBlock().getX() >> 4;
-        final int chunkZ = event.getBlock().getZ() >> 4;
-        Vector3i sourcePos = new Vector3i(event.getBlock().getX(), event.getBlock().getY(), event.getBlock().getZ());
+        Block piston = event.getBlock();
+        final int chunkX = piston.getX() >> 4;
+        final int chunkZ = piston.getZ() >> 4;
+        Vector3i sourcePos = new Vector3i(piston.getX(), piston.getY(), piston.getZ());
+
+        // Log the piston retraction event
+        StringBuilder pistonLog = new StringBuilder();
+        pistonLog.append("[PISTON RETRACT] pos=(")
+                .append(piston.getX()).append(",")
+                .append(piston.getY()).append(",")
+                .append(piston.getZ()).append(")")
+                .append(" dir=").append(face)
+                .append(" movedBlocks=").append(movedBlocks.size())
+                .append(" emptyEvent=").append(movedBlocks.isEmpty())
+                .append(" slime=").append(hasSlimeBlock)
+                .append(" honey=").append(hasHoneyBlock);
+        for (int i = 0; i < movedBlocks.size(); i++) {
+            Block b = movedBlocks.get(i);
+            pistonLog.append("\n  block[").append(i).append("]: type=").append(b.getType())
+                    .append(" from=(").append(b.getX()).append(",").append(b.getY()).append(",").append(b.getZ()).append(")")
+                    .append(" to=(")
+                    .append(b.getX() + face.getModX()).append(",")
+                    .append(b.getY() + face.getModY()).append(",")
+                    .append(b.getZ() + face.getModZ()).append(")");
+        }
+        LOGGER.info(pistonLog.toString());
 
         for (GrimPlayer player : GrimAPI.INSTANCE.getPlayerDataManager().getEntries()) {
             if (isCloseEnough(sourcePos, player.compensatedEntities.self.trackedServerPosition.getPos()) && player.compensatedWorld.isChunkLoaded(chunkX, chunkZ)) {
                 int lastTrans = player.lastTransactionSent.get();
                 PistonData data = new PistonData(face, boxes, lastTrans, false, hasSlimeBlock, hasHoneyBlock);
+
+                LOGGER.info("[PISTON RETRACT] Registering for player " + player.user.getName()
+                        + " transaction=" + lastTrans
+                        + " totalBoxes=" + boxes.size());
+
                 player.latencyUtils.addRealTimeTaskAsync(lastTrans, () -> player.compensatedWorld.activePistons.add(data));
             }
         }
