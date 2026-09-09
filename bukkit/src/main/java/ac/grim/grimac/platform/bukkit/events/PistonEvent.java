@@ -74,10 +74,18 @@ public class PistonEvent implements Listener {
         final Vector3i sourcePos = new Vector3i(piston.getX(), piston.getY(), piston.getZ());
 
         for (GrimPlayer player : GrimAPI.INSTANCE.getPlayerDataManager().getEntries()) {
-            if (isCloseEnough(sourcePos, player.compensatedEntities.self.trackedServerPosition.getPos()) && player.compensatedWorld.isChunkLoaded(chunkX, chunkZ)) {
+            if (isCloseEnough(sourcePos, player.compensatedEntities.self.trackedServerPosition.getPos())) {
                 final int lastTrans = player.lastTransactionSent.get();
                 PistonData data = new PistonData(blockFace, boxes, lastTrans, true, hasSlimeBlock, hasHoneyBlock);
-                player.latencyUtils.addRealTimeTaskAsync(lastTrans, () -> player.compensatedWorld.activePistons.add(data));
+                // isChunkLoaded() reads CompensatedWorld's non-thread-safe chunk map, which is mutated
+                // on the player's netty thread. Checking it here (on the server/region event thread) races
+                // with those mutations and can throw ArrayIndexOutOfBoundsException from within fastutil.
+                // Defer the check into the transaction task so it runs on the netty thread. (#2337, #2031)
+                player.latencyUtils.addRealTimeTaskAsync(lastTrans, () -> {
+                    if (player.compensatedWorld.isChunkLoaded(chunkX, chunkZ)) {
+                        player.compensatedWorld.activePistons.add(data);
+                    }
+                });
             }
         }
     }
@@ -132,10 +140,18 @@ public class PistonEvent implements Listener {
         Vector3i sourcePos = new Vector3i(event.getBlock().getX(), event.getBlock().getY(), event.getBlock().getZ());
 
         for (GrimPlayer player : GrimAPI.INSTANCE.getPlayerDataManager().getEntries()) {
-            if (isCloseEnough(sourcePos, player.compensatedEntities.self.trackedServerPosition.getPos()) && player.compensatedWorld.isChunkLoaded(chunkX, chunkZ)) {
+            if (isCloseEnough(sourcePos, player.compensatedEntities.self.trackedServerPosition.getPos())) {
                 int lastTrans = player.lastTransactionSent.get();
                 PistonData data = new PistonData(face, boxes, lastTrans, false, hasSlimeBlock, hasHoneyBlock);
-                player.latencyUtils.addRealTimeTaskAsync(lastTrans, () -> player.compensatedWorld.activePistons.add(data));
+                // isChunkLoaded() reads CompensatedWorld's non-thread-safe chunk map, which is mutated
+                // on the player's netty thread. Checking it here (on the server/region event thread) races
+                // with those mutations and can throw ArrayIndexOutOfBoundsException from within fastutil.
+                // Defer the check into the transaction task so it runs on the netty thread. (#2337, #2031)
+                player.latencyUtils.addRealTimeTaskAsync(lastTrans, () -> {
+                    if (player.compensatedWorld.isChunkLoaded(chunkX, chunkZ)) {
+                        player.compensatedWorld.activePistons.add(data);
+                    }
+                });
             }
         }
     }
