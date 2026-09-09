@@ -41,7 +41,15 @@ public final class SyncedTag<T> {
         // Server is sending tag replacement, clear default values.
         values.clear();
         for (int id : tag.getValues()) {
-            values.add(remapper.apply(id));
+            final T value;
+            try {
+                value = remapper.apply(id);
+            } catch (Exception e) {
+                // Modded/unknown ids are not present in PacketEvents' mappings; skip them instead
+                // of aborting the whole tag sync with an NPE. (#2855)
+                continue;
+            }
+            if (value != null) values.add(value);
         }
     }
 
