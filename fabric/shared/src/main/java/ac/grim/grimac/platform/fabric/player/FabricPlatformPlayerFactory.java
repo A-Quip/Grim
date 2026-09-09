@@ -118,7 +118,12 @@ public class FabricPlatformPlayerFactory extends AbstractPlatformPlayerFactory<F
 
     @Override
     public void replaceNativePlayer(@NotNull UUID uuid, @NotNull FabricServerPlayerHandle serverPlayerEntity) {
-        super.cache.getPlayer(uuid).replaceNativePlayer(serverPlayerEntity);
+        PlatformPlayer platformPlayer = super.cache.getPlayer(uuid);
+        // During transfer/respawn/dimension-change the native ServerPlayer can be swapped before Grim
+        // has a tracked player for this UUID (or after it was already removed). There is nothing to
+        // re-point in that case, so skip instead of dereferencing null and crashing the tick. (#2508)
+        if (platformPlayer == null) return;
+        platformPlayer.replaceNativePlayer(serverPlayerEntity);
     }
 
     public AbstractFabricPlatformInventory getPlatformInventory(AbstractFabricPlatformPlayer<?> serverPlayerEntity) {
