@@ -1,6 +1,7 @@
 package ac.grim.grimac.events.packets;
 
 import ac.grim.grimac.GrimAPI;
+import ac.grim.grimac.api.config.ConfigManager;
 import ac.grim.grimac.manager.datastore.PlayerToggleStore;
 import ac.grim.grimac.platform.api.player.PlatformPlayer;
 import ac.grim.grimac.utils.anticheat.LogUtil;
@@ -53,7 +54,13 @@ public class PacketPlayerJoinQuit extends PacketListenerAbstract {
         // And the user will be added to the map before the getPlayer() method call
         @NotNull PlatformPlayer platformPlayer = GrimAPI.INSTANCE.getPlatformPlayerFactory().getFromNativePlayerType(nativePlayerObject);
 
-        if (GrimAPI.INSTANCE.getConfigManager().getConfig().getBooleanElse("debug-pipeline-on-join", false)) {
+        // getConfig() can still be null here if a login is processed before Grim's config has finished
+        // loading (observed with Floodgate/Geyser bedrock logins on Fabric, #2645). Read it once and
+        // guard every use so a not-yet-loaded config degrades to defaults instead of throwing an NPE
+        // out of the PacketEvents listener.
+        final ConfigManager config = GrimAPI.INSTANCE.getConfigManager().getConfig();
+
+        if (config != null && config.getBooleanElse("debug-pipeline-on-join", false)) {
             LogUtil.info("Pipeline: " + ChannelHelper.pipelineHandlerNamesAsString(event.getUser().getChannel()));
         }
 
@@ -71,7 +78,7 @@ public class PacketPlayerJoinQuit extends PacketListenerAbstract {
                 (p, silent) -> GrimAPI.INSTANCE.getAlertManager().toggleBrands(p, silent),
                 (p, value) -> GrimAPI.INSTANCE.getAlertManager().setBrandsEnabled(p, value, true));
 
-        if (platformPlayer.hasPermission("grim.spectate") && GrimAPI.INSTANCE.getConfigManager().getConfig().getBooleanElse("spectators.hide-regardless", false)) {
+        if (platformPlayer.hasPermission("grim.spectate") && config != null && config.getBooleanElse("spectators.hide-regardless", false)) {
             GrimAPI.INSTANCE.getSpectateManager().onLogin(platformPlayer.getUniqueId());
         }
 
