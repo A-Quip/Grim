@@ -95,21 +95,32 @@ public class ProxyAlertMessenger extends PacketListenerAbstract {
         if (!wrapper.getChannelName().equals("BungeeCord") && !wrapper.getChannelName().equals("bungeecord:main"))
             return;
 
-        ByteArrayDataInput in = ByteStreams.newDataInput(wrapper.getData());
-
-        if (!in.readUTF().equals("GRIMAC")) return;
-
-        final String alert;
-        byte[] messageBytes = new byte[in.readShort()];
-        in.readFully(messageBytes);
-
+        // NOTE (#2868): a client connected directly to the backend can send arbitrary bytes on the
+        // BungeeCord channel. This whole block therefore parses fully untrusted input and must never
+        // throw out of the PacketEvents listener. readUTF()/readShort()/readFully() can throw
+        // (IllegalStateException) on truncated data and a negative length would throw
+        // NegativeArraySizeException — none of which were previously guarded.
+        final Component message;
         try {
-            alert = new DataInputStream(new ByteArrayInputStream(messageBytes)).readUTF();
-        } catch (IOException exception) {
-            LogUtil.error("Something went wrong whilst reading an alert forwarded from another server!", exception);
+            ByteArrayDataInput in = ByteStreams.newDataInput(wrapper.getData());
+
+            if (!in.readUTF().equals("GRIMAC")) return;
+
+            int length = in.readShort();
+            if (length < 0) return; // malformed / spoofed payload
+            byte[] messageBytes = new byte[length];
+            in.readFully(messageBytes);
+
+            String alert = new DataInputStream(new ByteArrayInputStream(messageBytes)).readUTF();
+            message = MessageUtil.miniMessage(alert);
+        } catch (Exception exception) {
+            // Malformed payload from a direct/hostile connection — drop it silently.
             return;
         }
-        Component message = MessageUtil.miniMessage(alert);
+
+        // WARNING (#2868): Grim cannot currently verify that this message actually originated from the
+        // proxy rather than a directly-connected client, so a well-formed message here may be spoofed.
+        // See the fix writeup for the recommended shared-secret mitigation and deployment guidance.
         GrimAPI.INSTANCE.getAlertManager().sendAlert(message, null);
     }
 }
